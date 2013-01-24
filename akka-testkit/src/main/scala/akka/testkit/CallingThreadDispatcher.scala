@@ -50,7 +50,11 @@ private[testkit] class CallingThreadDispatcherQueues extends Extension {
 
   // we have to forget about long-gone threads sometime
   private def gc {
-    queues = queues mapValues (_ filter (_.get ne null)) filter (!_._2.isEmpty)
+    queues = (Map.newBuilder[CallingThreadMailbox, Set[WeakReference[NestingQueue]]] /: queues) {
+      case (m, (k, v)) ⇒
+        val nv = v filter (_.get ne null)
+        if (nv.isEmpty) m else m += (k -> nv)
+    }.result
   }
 
   protected[akka] def registerQueue(mbox: CallingThreadMailbox, q: NestingQueue): Unit = synchronized {
@@ -61,7 +65,7 @@ private[testkit] class CallingThreadDispatcherQueues extends Extension {
       queues += mbox -> Set(new WeakReference(q))
     }
     val now = System.nanoTime
-    if (now - lastGC > 1000000000l) {
+    if (now - lastGC > 100000000l) { // 100ms; make too long and CallingThreadDispatcherModelSpec fails
       lastGC = now
       gc
     }
@@ -153,8 +157,10 @@ class CallingThreadDispatcher(
 
   override def suspend(actor: ActorCell) {
     actor.mailbox match {
-      case m: CallingThreadMailbox ⇒ m.suspendSwitch.switchOn; m.suspend()
-      case m                       ⇒ m.systemEnqueue(actor.self, Suspend())
+      case m: CallingThreadMailbox ⇒
+        m.suspendSwitch.switchOn; m.suspend()
+      case m ⇒
+        m.systemEnqueue(actor.self, Suspend())
     }
   }
 
